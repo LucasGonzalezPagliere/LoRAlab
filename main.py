@@ -10,7 +10,6 @@ import os
 BASE_MODELS = [
     ("google/gemma-3-4b-it", "Google Gemma 3 4B IT"),
     ("google/gemma-3-1b-it", "Google Gemma 3 1B IT"),
-    ("google/gemma-3n-E2B-it", "Google Gemma 3n E2B IT"),
     ("meta-llama/Meta-Llama-3-8B-Instruct", "Meta Llama 3 8B Instruct")
 ]
 
@@ -40,8 +39,8 @@ def prepare_dataset(file):
         for _, row in df.iterrows():
             question = row["question"]
             answer = row["answer"]
-            # Format as chat template for IT models (Gemma 3n expects 'model' not 'assistant')
-            chat_text = f'<start_of_turn>user\n{question}<end_of_turn>\n<start_of_turn>model\n{answer}<end_of_turn>'
+            # Format as chat template for IT models
+            chat_text = f'<start_of_turn>user\n{question}<end_of_turn>\n<start_of_turn>assistant\n{answer}<end_of_turn>'
             formatted_texts.append(chat_text)
         
         return Dataset.from_pandas(pd.DataFrame({"text": formatted_texts}))
@@ -104,10 +103,10 @@ def lora_train(dataset_file, model_choice, lora_rank, epochs, learning_rate, hf_
                 return 0.0, "\n".join(log_msgs), None
         log_msgs.append("Setting up LoRA config...")
         lora_config = LoraConfig(
-            r=int(lora_rank),  # UI-controlled
-            lora_alpha=16,     # Official recommended default for Gemma 3n (fixed)
-            target_modules="all-linear",  # Official recommended for Gemma 3n (fixed)
-            lora_dropout=0.05, # Official recommended (fixed)
+            r=int(lora_rank),
+            lora_alpha=32,  # Increased from 16
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+            lora_dropout=0.05,
             bias="none",
             task_type=TaskType.CAUSAL_LM
         )
@@ -129,11 +128,11 @@ def lora_train(dataset_file, model_choice, lora_rank, epochs, learning_rate, hf_
         def train_block(fp16_val, bf16_val):
             args = TrainingArguments(
                 output_dir=output_dir,
-                per_device_train_batch_size=1,  # UI-controlled
-                num_train_epochs=int(epochs),   # UI-controlled
-                learning_rate=learning_rate,    # UI-controlled
-                weight_decay=0.01,              # Official recommended (fixed)
-                max_grad_norm=0.3,              # Official recommended for Gemma 3n (fixed)
+                per_device_train_batch_size=1,  # Match Colab batch size
+                num_train_epochs=int(epochs),
+                learning_rate=4e-5,  # Match Colab learning rate
+                weight_decay=0.01,  # Match Colab weight decay
+                max_grad_norm=1.0,  # Prevent exploding gradients
                 logging_steps=1,
                 save_strategy="no",
                 report_to=[],
@@ -141,7 +140,7 @@ def lora_train(dataset_file, model_choice, lora_rank, epochs, learning_rate, hf_
                 bf16=bf16_val,
                 disable_tqdm=False,
                 dataloader_pin_memory=False,  # Disable for MPS
-                gradient_accumulation_steps=4,  # Official recommended (fixed)
+                gradient_accumulation_steps=4,  # Effective batch size = 4
             )
             def log_callback(logs):
                 if "loss" in logs:
